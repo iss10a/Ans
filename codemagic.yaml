@@ -1,0 +1,80 @@
+# Codemagic configuration for a native Android APK.
+#
+# instance_type is mac_mini_m2 on purpose. linux_x2 is only available to
+# accounts with billing enabled, and selecting it on the free tier fails before
+# the build even starts with "The selected instance type is not available with
+# the current billing plan." The free tier includes 500 minutes/month on
+# mac_mini_m2, and the Android SDK is preinstalled on that image, so an Android
+# build runs there without any paid plan.
+
+workflows:
+  android-apk:
+    name: Android APK
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      java: 17
+      vars:
+        KEYSTORE_PASSWORD: "android"
+        KEY_ALIAS: "upload"
+        KEY_PASSWORD: "android"
+
+    triggering:
+      events:
+        - push
+        - tag
+      cancel_previous_builds: true
+
+    scripts:
+      - name: Show the toolchain
+        script: |
+          set -euo pipefail
+          java -version
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+
+      - name: Prepare the Gradle wrapper
+        script: |
+          set -euo pipefail
+          # The wrapper JAR is a binary and is not committed, so it is created
+          # here on first use. If Gradle itself is unavailable the build falls
+          # back to the preinstalled `gradle` command.
+          if [ ! -f ./gradlew ]; then
+            gradle wrapper --gradle-version 8.7 || true
+          fi
+          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
+
+      - name: Generate a signing key
+        script: |
+          set -euo pipefail
+          keytool -genkeypair -v \
+            -keystore "$CM_BUILD_DIR/release.jks" \
+            -alias "$KEY_ALIAS" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
+            -dname "CN=Git Folder Uploader, OU=CI, O=Personal, L=None, S=None, C=US"
+
+      - name: Build the release APK
+        script: |
+          set -euo pipefail
+          export KEYSTORE_PATH="$CM_BUILD_DIR/release.jks"
+          if [ -f ./gradlew ]; then
+            ./gradlew --no-daemon assembleRelease
+          else
+            gradle --no-daemon assembleRelease
+          fi
+
+      - name: List the outputs
+        script: |
+          set -euo pipefail
+          ls -lh app/build/outputs/apk/release/
+
+    artifacts:
+      - app/build/outputs/apk/release/*.apk
+
+    # Add your address here if you want the APK emailed when a build finishes:
+    #
+    # publishing:
+    #   email:
+    #     recipients:
+    #       - you@example.com
