@@ -1,0 +1,42 @@
+workflows:
+  android-apk:
+    name: Android APK
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      java: 17
+    scripts:
+      - name: Unpack and locate the project
+        script: |
+          set -e
+          ls -la
+          if [ ! -f settings.gradle.kts ]; then
+            ARCHIVE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+            if [ -n "$ARCHIVE" ]; then
+              echo "Unpacking $ARCHIVE"
+              rm -rf _unpacked && mkdir -p _unpacked
+              unzip -q "$ARCHIVE" -d _unpacked
+            fi
+            FOUND=$(find . -maxdepth 5 -name settings.gradle.kts | head -n 1)
+            if [ -z "$FOUND" ]; then
+              echo "ERROR: no Gradle project found."
+              exit 1
+            fi
+            cd "$(dirname "$FOUND")"
+          fi
+          pwd > "$CM_BUILD_DIR/.root"
+          echo "Project root: $(cat "$CM_BUILD_DIR/.root")"
+      - name: Build the APK
+        script: |
+          set -e
+          cd "$(cat "$CM_BUILD_DIR/.root")"
+          keytool -genkeypair -v -keystore "$CM_BUILD_DIR/r.jks" -alias upload \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android -dname "CN=GFU, O=Personal, C=US"
+          export KEYSTORE_PATH="$CM_BUILD_DIR/r.jks"
+          export KEYSTORE_PASSWORD=android KEY_ALIAS=upload KEY_PASSWORD=android
+          gradle wrapper --gradle-version 8.7 || true
+          [ -f ./gradlew ] && chmod +x ./gradlew && ./gradlew --no-daemon assembleRelease || gradle --no-daemon assembleRelease
+          ls -lh app/build/outputs/apk/release/
+    artifacts:
+      - "**/outputs/apk/release/*.apk"
